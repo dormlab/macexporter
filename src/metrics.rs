@@ -12,6 +12,7 @@ pub struct Metrics {
     cpu_usage_ratio: Gauge,
     memory_used_bytes: IntGauge,
     memory_total_bytes: IntGauge,
+    thermal_pressure_level: IntGauge,
 
     rx_bytes_total: IntCounterVec,
     tx_bytes_total: IntCounterVec,
@@ -45,6 +46,10 @@ impl Metrics {
             "dormlab_memory_total_bytes",
             "Physical memory installed (sysctl hw.memsize).",
         ))?;
+        let thermal_pressure_level = IntGauge::with_opts(Opts::new(
+            "dormlab_thermal_pressure_level",
+            "macOS thermal pressure: 0=Nominal, 1=Fair, 2=Serious, 3=Critical.",
+        ))?;
         let rx_bytes_total = IntCounterVec::new(
             Opts::new(
                 "dormlab_network_rx_bytes_total",
@@ -72,6 +77,7 @@ impl Metrics {
         registry.register(Box::new(cpu_usage_ratio.clone()))?;
         registry.register(Box::new(memory_used_bytes.clone()))?;
         registry.register(Box::new(memory_total_bytes.clone()))?;
+        registry.register(Box::new(thermal_pressure_level.clone()))?;
         registry.register(Box::new(rx_bytes_total.clone()))?;
         registry.register(Box::new(tx_bytes_total.clone()))?;
         registry.register(Box::new(up.clone()))?;
@@ -81,6 +87,7 @@ impl Metrics {
             cpu_usage_ratio,
             memory_used_bytes,
             memory_total_bytes,
+            thermal_pressure_level,
             rx_bytes_total,
             tx_bytes_total,
             last_rx: Mutex::new(HashMap::new()),
@@ -102,6 +109,9 @@ impl Metrics {
         }
         if let Some(total) = snap.memory_total_bytes {
             self.memory_total_bytes.set(total as i64);
+        }
+        if let Some(level) = snap.thermal_pressure_level {
+            self.thermal_pressure_level.set(level as i64);
         }
 
         // Counters: inc_by delta vs the last sample, handling kernel

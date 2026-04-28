@@ -6,6 +6,8 @@ pub struct Snapshot {
     pub cpu_usage_ratio: Option<f64>,
     pub memory_used_bytes: Option<u64>,
     pub memory_total_bytes: Option<u64>,
+    /// 0=Nominal, 1=Fair, 2=Serious, 3=Critical (powermetrics thermal).
+    pub thermal_pressure_level: Option<u8>,
     pub interfaces: Vec<IfaceCounters>,
 }
 

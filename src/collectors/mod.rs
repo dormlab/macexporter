@@ -11,6 +11,7 @@ mod cpu_mem;
 mod network;
 mod power;
 mod sysctl;
+mod thermal;
 
 /// Collect a complete snapshot, running the slow commands concurrently.
 pub async fn collect(no_power: bool) -> Result<Snapshot> {
@@ -21,9 +22,17 @@ pub async fn collect(no_power: bool) -> Result<Snapshot> {
             power::cpu_power_watts().await
         }
     };
+    let thermal_fut = async {
+        if no_power {
+            Ok(None)
+        } else {
+            thermal::pressure_level().await
+        }
+    };
 
-    let (power_res, cpu_mem_res, total_res, net_res) = tokio::join!(
+    let (power_res, thermal_res, cpu_mem_res, total_res, net_res) = tokio::join!(
         power_fut,
+        thermal_fut,
         cpu_mem::cpu_and_memory(),
         sysctl::memory_total_bytes(),
         network::interfaces(),
@@ -38,10 +47,11 @@ pub async fn collect(no_power: bool) -> Result<Snapshot> {
     };
 
     Ok(Snapshot {
-        cpu_power_watts: log_warn(power_res, "powermetrics").flatten(),
+        cpu_power_watts: log_warn(power_res, "powermetrics cpu_power").flatten(),
         cpu_usage_ratio,
         memory_used_bytes,
         memory_total_bytes: log_warn(total_res, "sysctl hw.memsize").flatten(),
+        thermal_pressure_level: log_warn(thermal_res, "powermetrics thermal").flatten(),
         interfaces: log_warn(net_res, "netstat").unwrap_or_default(),
     })
 }

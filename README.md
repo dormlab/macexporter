@@ -1,4 +1,4 @@
-# dormlab-nodeexporter
+# macexporter
 
 A small Prometheus exporter for **macOS** hosts. Exposes the metrics that
 the official Prometheus `node_exporter` and Apple's tooling don't make

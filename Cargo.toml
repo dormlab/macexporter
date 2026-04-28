@@ -1,0 +1,17 @@
+[package]
+name = "dormlab-nodeexporter"
+version = "0.1.0"
+edition = "2024"
+description = "Tiny Prometheus exporter for macOS host metrics on DormLab Mac minis"
+license = "MIT"
+
+[[bin]]
+name = "dormlab-nodeexporter"
+path = "src/main.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+opt-level = "z"
+panic = "abort"

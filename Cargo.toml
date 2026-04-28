@@ -1,17 +1,37 @@
 [package]
 name = "dormlab-nodeexporter"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
-description = "Tiny Prometheus exporter for macOS host metrics on DormLab Mac minis"
+description = "Prometheus node exporter for macOS hosts: CPU power, CPU usage, memory, and per-interface network counters"
 license = "MIT"
+readme = "README.md"
+keywords = ["prometheus", "exporter", "macos", "metrics", "monitoring"]
+categories = ["command-line-utilities"]
 
 [[bin]]
 name = "dormlab-nodeexporter"
 path = "src/main.rs"
 
+[dependencies]
+anyhow = "1"
+axum = "0.8"
+clap = { version = "4", features = ["derive", "env"] }
+prometheus = { version = "0.14", default-features = false }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "process",
+    "signal",
+    "sync",
+    "time",
+] }
+tower-http = { version = "0.6", features = ["trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
 [profile.release]
 lto = true
 codegen-units = 1
 strip = true
-opt-level = "z"
+opt-level = 3
 panic = "abort"

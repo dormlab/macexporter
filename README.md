@@ -1,20 +1,43 @@
 # dormlab-nodeexporter
 
-Tiny Prometheus exporter for macOS Mac mini host metrics. Replaces the
-original Python prototype (~700 MB RSS) with a Rust binary (~1 MB RSS).
+A small Prometheus exporter for **macOS** hosts. Exposes the metrics that
+the official Prometheus `node_exporter` and Apple's tooling don't make
+easy to surface together — CPU package power, CPU usage, real "memory
+used" (excluding reclaimable cache), and per-interface byte counters —
+over a single endpoint.
+
+Built for headless Mac mini server racks; works on any macOS host.
 
 ## Metrics
 
-| Metric | Source |
-|--------|--------|
-| `dormlab_cpu_power_watts` | `powermetrics --samplers cpu_power` (CPU package power) |
-| `dormlab_cpu_usage_ratio` | `top -l 1` user + sys, 0..1 |
-| `dormlab_memory_used_bytes` | `top` PhysMem: wired + compressor (excludes file-backed cache; matches Activity Monitor's "Memory Used" view) |
-| `dormlab_memory_total_bytes` | `sysctl hw.memsize` |
-| `dormlab_network_rx_bytes_total{iface}` | `netstat -ibn` Ibytes per non-loopback iface |
-| `dormlab_network_tx_bytes_total{iface}` | `netstat -ibn` Obytes per non-loopback iface |
+| Name | Type | Source | Notes |
+|------|------|--------|-------|
+| `dormlab_cpu_power_watts` | gauge | `powermetrics --samplers cpu_power` | Requires running as root. Set `--no-power` to skip. |
+| `dormlab_cpu_usage_ratio` | gauge | `top -l 1 -n 0` (`user + sys`) | 0..1 |
+| `dormlab_memory_used_bytes` | gauge | `top` PhysMem (`wired + compressor`) | Excludes reclaimable file-backed cache. Matches Activity Monitor's headroom view. |
+| `dormlab_memory_total_bytes` | gauge | `sysctl hw.memsize` | |
+| `dormlab_network_rx_bytes_total{iface}` | counter | `netstat -ibn` `Ibytes` | Loopback skipped, deduplicated per iface. |
+| `dormlab_network_tx_bytes_total{iface}` | counter | `netstat -ibn` `Obytes` | Same. |
+| `dormlab_nodeexporter_up{version}` | gauge | always `1` | Liveness for `up{}` queries. |
 
-Listens on `0.0.0.0:9101` and serves `GET /metrics`.
+## Architecture
+
+A background tokio task runs all four shell-out collectors concurrently
+(`tokio::join!`) every `--refresh-secs` seconds and updates a shared
+Prometheus `Registry`. The `axum` HTTP handler reads from the registry —
+no subprocesses run inside a request, so the `/metrics` scrape is fast and
+predictable even when `powermetrics` takes ~500 ms to sample.
+
+Counters stay honest across rapid scrapes by tracking the previous
+absolute kernel value per interface and feeding `inc_by(delta)` to
+Prometheus, so `rate()` queries work normally and counter resets (iface
+reload, host reboot) are absorbed via `saturating_sub`.
+
+## Endpoints
+
+- `GET /metrics` — Prometheus text exposition.
+- `GET /healthz` — `200 ok` if the process is alive.
+- `GET /` — landing page with links to the above.
 
 ## Build
 
@@ -22,9 +45,35 @@ Listens on `0.0.0.0:9101` and serves `GET /metrics`.
 cargo build --release --target aarch64-apple-darwin
 ```
 
-Produces a ~370 KB binary at `target/aarch64-apple-darwin/release/dormlab-nodeexporter`.
+Produces a single ~1.8 MB binary at
+`target/aarch64-apple-darwin/release/dormlab-nodeexporter`. No runtime
+dependencies — it shells out to `powermetrics`, `top`, `sysctl`, and
+`netstat`, all bundled with macOS.
 
-## Deploy (per Mac mini)
+```sh
+cargo test --release --target aarch64-apple-darwin
+```
+
+## CLI
+
+```text
+Usage: dormlab-nodeexporter [OPTIONS]
+
+Options:
+      --bind <BIND>                   [env: DORMLAB_BIND=] [default: 0.0.0.0:9101]
+      --refresh-secs <REFRESH_SECS>   [env: DORMLAB_REFRESH_SECS=] [default: 5]
+      --no-power                      [env: DORMLAB_NO_POWER=]
+  -h, --help                          Print help
+  -V, --version                       Print version
+```
+
+Set `RUST_LOG=dormlab_nodeexporter=debug` for verbose logs.
+
+## Deploy as a LaunchDaemon
+
+`powermetrics` requires root. Drop the included
+[`dev.dormlab.nodeexporter.plist`](./dev.dormlab.nodeexporter.plist) into
+`/Library/LaunchDaemons/` and bootstrap it:
 
 ```sh
 sudo install -m 755 target/aarch64-apple-darwin/release/dormlab-nodeexporter \
@@ -34,19 +83,32 @@ sudo install -m 644 dev.dormlab.nodeexporter.plist \
 sudo launchctl bootstrap system /Library/LaunchDaemons/dev.dormlab.nodeexporter.plist
 ```
 
-`powermetrics` requires root, hence the system-level LaunchDaemon.
+Logs go to `/var/log/dormlab-nodeexporter.log`.
 
-## Why Rust?
+## Prometheus scrape config
 
-The original Python prototype leaked memory under the 15-second Prometheus
-scrape cadence — accumulated to ~700 MB RSS over hours due to threading
-overhead and subprocess output buffering. A Rust port using only the
-standard library settled at **1 MB RSS** with no GC required and a single
-~370 KB binary instead of a Python interpreter.
+```yaml
+scrape_configs:
+  - job_name: macos-host
+    static_configs:
+      - targets:
+          - mac-1.example.com:9101
+          - mac-2.example.com:9101
+```
 
-## Why these specific metrics?
+The exporter listens on `0.0.0.0:9101` by default. Restrict at the
+firewall or with `--bind 127.0.0.1:9101` plus a Tailscale / SSH tunnel
+if you care.
 
-The colima VMs each have node-exporter inside, but those see only the VM's
-8-CPU/12-GiB allocation — not the mini's full 10/16. They also can't get
-power metrics. This exporter runs on the **host** to surface the metrics
-node-exporter can't, then Prometheus (in-cluster) scrapes it via Tailscale.
+## Why not the upstream `node_exporter`?
+
+The Prometheus project's `node_exporter` works on macOS via a Darwin
+collector, but it's missing power metrics (no `powermetrics` integration)
+and its memory accounting reports the kernel's "active" pages rather than
+the user-meaningful "wired + compressor" view. This exporter intentionally
+covers a smaller surface — just the four things you usually want from a
+macOS host — and keeps the binary tiny.
+
+## License
+
+MIT — see [LICENSE](./LICENSE).
